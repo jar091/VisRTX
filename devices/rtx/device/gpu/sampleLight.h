@@ -125,48 +125,53 @@ VISRTX_DEVICE LightSample sampleSphereLight(
   auto u1 = pcg_uniform(&rs);
   auto u2 = pcg_uniform(&rs);
 
-  // Uniform sampling on unit sphere using Marsaglia's method
-  // u1 maps to z-coordinate: z ∈ [-1, 1]
-  auto z = 1.f - 2.f * u1;
-  // r is the radius in the xy-plane for this z-level
-  auto r = sqrtf(std::max(0.f, 1.f - z * z));
-  // u2 maps to azimuthal angle: φ ∈ [0, 2π]
-  auto phi = kTwoPi * u2;
-  auto x = r * cosf(phi);
-  auto y = r * sinf(phi);
-
-  // Scale by sphere radius to get point on sphere surface
-  auto p = vec3(x, y, z) * ld.sphere.radius;
-  auto worldSamplePos = xfmPoint(xfm, ld.sphere.position + p);
-  ls.dir = worldSamplePos - origin;
-  ls.dist = length(ls.dir);
-  ls.dir /= ls.dist;
+  // Note: assumes uniform scaling (or none) of the light by the instance.
+  const vec3 center = xfmPoint(xfm, ld.sphere.position);
+  const float radius = ld.sphere.radius
+      * glm::length(xfmVec(xfm, vec3(1.f, 0.f, 0.f)));
+  const vec3 toCenter = center - origin;
+  const float distCenter2 = dot(toCenter, toCenter);
+  const float radius2 = radius * radius;
 
   // Sphere emits uniformly in all directions (Lambertian)
   ls.radiance = ld.color * ld.sphere.intensity;
 
-  // Convert area PDF to solid angle PDF for proper Monte Carlo integration
-  // Area PDF = 1 / (4πr²), but we need solid angle PDF
-  // Conversion: pdf_solid_angle = pdf_area * distance² / |cos θ|
-  // For sphere: cos θ = dot(surface_normal, -light_direction)
-  // Surface normal at sampled point: direction from sphere center to sample
-  // point
-  auto worldSphereCenter = xfmPoint(xfm, ld.sphere.position);
-  auto surfaceNormal = normalize(worldSamplePos - worldSphereCenter);
-  auto cosTheta = dot(surfaceNormal, -ls.dir);
-
-  if (cosTheta > 0.0f) {
-    // Note: For non-uniform scaling transforms, the area calculation would need
-    // to account for the transform's effect on surface area (determinant of
-    // jacobian) Currently assumes uniform scaling or no scaling of the light
-    // geometry
-    float areaPdf = 1.f / (4.f * kPi * ld.sphere.radius * ld.sphere.radius);
-    ls.pdf = areaPdf * pow2(ls.dist) / cosTheta;
-  } else {
-    // Back-facing surface element contributes no light
-    ls.radiance = vec3(0.0f);
-    ls.pdf = 0.0f;
+  if (distCenter2 <= radius2) {
+    // Inside the light: every direction sees it.
+    auto z = 1.f - 2.f * u1;
+    auto r = sqrtf(fmaxf(0.f, 1.f - z * z));
+    auto phi = kTwoPi * u2;
+    ls.dir = vec3(r * cosf(phi), r * sinf(phi), z);
+    ls.dist = radius;
+    ls.pdf = 1.f / (4.f * kPi);
+    return ls;
   }
+
+  // Uniformly sample the cone of directions subtended by the sphere: exact
+  // pdf 1 / solid angle, and every sample hits the light.
+  const float distCenter = sqrtf(distCenter2);
+  const vec3 w = toCenter / distCenter;
+  const float sinThetaMax2 = radius2 / distCenter2;
+  const float cosThetaMax = sqrtf(fmaxf(0.f, 1.f - sinThetaMax2));
+  const float cosTheta = 1.f - u1 * (1.f - cosThetaMax);
+  const float sinTheta = sqrtf(fmaxf(0.f, 1.f - cosTheta * cosTheta));
+  const float phi = kTwoPi * u2;
+
+  const vec3 a = fabsf(w.x) > 0.9f ? vec3(0.f, 1.f, 0.f) : vec3(1.f, 0.f, 0.f);
+  const vec3 u = normalize(cross(a, w));
+  const vec3 v = cross(w, u);
+  ls.dir = normalize(
+      u * (sinTheta * cosf(phi)) + v * (sinTheta * sinf(phi)) + w * cosTheta);
+
+  // Distance to the near intersection with the sphere.
+  const float b = dot(ls.dir, toCenter);
+  const float disc = fmaxf(0.f, b * b - (distCenter2 - radius2));
+  ls.dist = fmaxf(0.f, b - sqrtf(disc));
+
+  const float solidAngle = kTwoPi * (1.f - cosThetaMax);
+  ls.pdf = solidAngle > 0.f ? 1.f / solidAngle : 0.f;
+  if (!(ls.pdf > 0.f))
+    ls.radiance = vec3(0.f);
 
   return ls;
 }

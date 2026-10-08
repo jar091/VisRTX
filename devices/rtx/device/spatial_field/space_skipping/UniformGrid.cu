@@ -170,6 +170,8 @@ void UniformGrid::init(ivec3 dims, box3 objectBounds)
 void UniformGrid::computeValueRanges(const SpatialFieldGPUData &sfgd)
 {
   size_t numMCs = numCells();
+  if (numMCs == 0 || !m_valueRanges)
+    return;
   size_t numThreads = 1024;
 
   // Temporary device upload — we don't have access to the framedata store
@@ -254,6 +256,11 @@ void UniformGrid::computeOpacityBounds(
     CUstream stream, cudaTextureObject_t cm, size_t cmSize, box1 cmRange)
 {
   size_t n = numCells();
+  // Empty grid (field never initialized it): a zero-sized launch is an
+  // invalid configuration whose error would be picked up by the next
+  // unrelated CUDA call.
+  if (n == 0 || !m_opacityBounds || !m_valueRanges)
+    return;
   size_t numThreads = 1024;
   computeOpacityBoundsGPU<<<iDivUp(n, numThreads), numThreads, 0, stream>>>(
       m_opacityBounds, m_valueRanges, cm, n, cmSize, cmRange);

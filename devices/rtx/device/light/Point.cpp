@@ -39,10 +39,13 @@ void Point::commitParameters()
 {
   Light::commitParameters();
   m_position = getParam<vec3>("position", vec3(0.f, 0.f, 0.f));
+  // 'intensity' is the radiant intensity in W/sr, 'power' the total flux of
+  // the isotropic emitter (I = P / 4pi).
+  m_intensity = hasParam("intensity") || !hasParam("power")
+      ? getParam<float>("intensity", 1.f)
+      : getParam<float>("power", 1.f) / (4.f * float(M_PI));
   m_intensity =
-      std::clamp(getParam<float>("intensity", getParam<float>("power", 1.f)),
-          0.f,
-          std::numeric_limits<float>::max());
+      std::clamp(m_intensity, 0.f, std::numeric_limits<float>::max());
   m_radius = std::max(getParam<float>("radius", 1.f), 0.f);
 }
 
@@ -56,7 +59,10 @@ LightGPUData Point::gpuData() const
   } else {
     retval.type = LightType::SPHERE;
     retval.sphere.position = m_position;
-    retval.sphere.intensity = m_intensity;
+    // The sphere is sampled as a Lambertian emitter of radiance L, which has
+    // an intensity of L * pi * r^2 in every direction.
+    retval.sphere.intensity =
+        m_intensity / (float(M_PI) * m_radius * m_radius);
     retval.sphere.radius = m_radius;
     retval.sphere.oneOverArea = 1.0f / (4.0f * float(M_PI) * m_radius * m_radius);
   }

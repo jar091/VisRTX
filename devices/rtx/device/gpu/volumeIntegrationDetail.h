@@ -396,7 +396,19 @@ VISRTX_DEVICE  float latticeRayMarchVolume(ScreenSample &ss,
   // The local ray direction accounts for instance scaling transformation,
   // meaning it's not a unit vector. We use that to compensate step size.
   const float localDirLen = glm::length(hit.localRay.dir);
-  const float localStep = volume.stepSize * invSamplingRate;
+  // The base step is the field's own (half a voxel), but never coarser than a
+  // fixed fraction of the volume's diagonal. With the default sampling rate
+  // (0.125, i.e. 4 voxels per step) a coarse field otherwise gets less than
+  // one sample per ray: a 4^3 grid spanning 2 units was marched at 2.7 units
+  // per step, which skips the thin opaque shells a sharp transfer function
+  // carves out of it and renders the volume nearly transparent. Large fields
+  // are unaffected (their half-voxel step is far below the bound).
+  constexpr float MIN_BASE_STEPS_PER_DIAGONAL = 512.f;
+  const float diagonal = glm::length(size(volume.bounds));
+  const float baseStep = diagonal > 0.f
+      ? fminf(volume.stepSize, diagonal / MIN_BASE_STEPS_PER_DIAGONAL)
+      : volume.stepSize;
+  const float localStep = baseStep * invSamplingRate;
   if (localStep <= 0.f || localDirLen <= 0.f)
     return std::numeric_limits<float>::max();
   const float dt = localStep / localDirLen;

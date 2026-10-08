@@ -41,8 +41,22 @@ void Rect::commitParameters()
   m_position = getParam<vec3>("position", vec3(0.f, 0.f, 0.f));
   m_edge1 = getParam<vec3>("edge1", vec3(1.f, 0.f, 0.f));
   m_edge2 = getParam<vec3>("edge2", vec3(0.f, 1.f, 0.f));
-  m_intensity = std::max(
-      getParam<float>("intensity", getParam<float>("power", 1.f)), 0.f);
+  // The shaders use 'm_intensity' as the emitted radiance. Per the quad light
+  // definition (KHR_AREA_LIGHTS) 'radiance' is that directly, 'intensity' is
+  // the radiant intensity in W/sr along the normal and 'power' the emitted
+  // flux of the one-sided Lambertian emitter.
+  const float area = length(cross(m_edge1, m_edge2));
+  if (hasParam("radiance"))
+    m_intensity = getParam<float>("radiance", 1.f);
+  else if (hasParam("intensity"))
+    m_intensity = area > 0.f ? getParam<float>("intensity", 1.f) / area : 0.f;
+  else if (hasParam("power"))
+    m_intensity = area > 0.f
+        ? getParam<float>("power", 1.f) / (float(M_PI) * area)
+        : 0.f;
+  else
+    m_intensity = 1.f;
+  m_intensity = std::max(m_intensity, 0.f);
 
   auto side = getParamString("side", "front");
   if (side == "front")

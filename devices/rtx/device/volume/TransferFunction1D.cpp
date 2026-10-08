@@ -80,6 +80,18 @@ void TransferFunction1D::finalize()
     return;
   }
 
+  if (!m_field->isValid()) {
+    // An invalid field (e.g. an unsupported subtype) never initialized its
+    // macrocell grid: launching computeOpacityBounds() on it would use garbage
+    // dimensions and leave a pending CUDA launch error that surfaces later in
+    // an unrelated kernel. The volume reports !isValid() and is skipped by
+    // Group, so there is nothing to build here.
+    reportMessage(ANARI_SEVERITY_WARNING,
+        "invalid spatial field on transferFunction1D ANARIVolume");
+    cleanup();
+    return;
+  }
+
   if (m_unitDistance <= 0.f) {
     reportMessage(ANARI_SEVERITY_WARNING,
         "unitDistance must be positive on transferFunction1D volume, "

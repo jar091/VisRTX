@@ -58,8 +58,8 @@ struct UniformGrid
 
   box1 *m_valueRanges = nullptr;
   float2 *m_opacityBounds = nullptr; // .x = min, .y = max
-  ivec3 m_dims;
-  ivec3 m_fieldDims;
+  ivec3 m_dims{0};
+  ivec3 m_fieldDims{0};
   box3 m_objectBounds;
 };
 

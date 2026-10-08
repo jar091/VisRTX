@@ -42,10 +42,17 @@ void Spot::commitParameters()
   m_direction = getParam<vec3>("direction", vec3(0.f, 0.f, -1.f));
   m_openingAngle = getParam<float>("openingAngle", M_PI);
   m_falloffAngle = getParam<float>("falloffAngle", 0.1f);
+  // 'intensity' is the radiant intensity in W/sr, 'power' the flux emitted
+  // into the cone.
+  if (hasParam("intensity") || !hasParam("power")) {
+    m_intensity = getParam<float>("intensity", 1.f);
+  } else {
+    const float solidAngle =
+        2.f * float(M_PI) * (1.f - cosf(0.5f * m_openingAngle));
+    m_intensity = getParam<float>("power", 1.f) / std::max(solidAngle, 1e-6f);
+  }
   m_intensity =
-      std::clamp(getParam<float>("intensity", getParam<float>("power", 1.f)),
-          0.f,
-          std::numeric_limits<float>::max());
+      std::clamp(m_intensity, 0.f, std::numeric_limits<float>::max());
 }
 
 LightGPUData Spot::gpuData() const
@@ -60,8 +67,10 @@ LightGPUData Spot::gpuData() const
   retval.type = LightType::SPOT;
   retval.spot.position = m_position;
   retval.spot.direction = m_direction;
-  retval.spot.cosOuterAngle = cosf(m_openingAngle);
-  retval.spot.cosInnerAngle = cosf(innerAngle);
+  // 'openingAngle' is the full apex angle of the cone, the shaders compare
+  // against the cosine of the half angles.
+  retval.spot.cosOuterAngle = cosf(0.5f * m_openingAngle);
+  retval.spot.cosInnerAngle = cosf(0.5f * std::max(innerAngle, 0.f));
   retval.spot.intensity = m_intensity;
   return retval;
 }

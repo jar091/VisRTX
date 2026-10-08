@@ -134,12 +134,14 @@ VISRTX_DEVICE bool shouldTerminatePath(ScreenSample &ss,
 // A NEE light sample plus which BSDF-reachable kind it is. The environment (env
 // MIS) and Geometry Lights can both also be hit by a BSDF escape/continuation,
 // so both get a balance-heuristic weight; all other light types cannot, so they
-// take w_nee = 1.
+// take w_nee = 1. The ambient term is a uniform environment a BSDF escape also
+// reaches, so it is MIS-weighted too.
 struct SurfaceLightSample
 {
   LightSample ls;
   bool isEnv;
   bool isGeometry;
+  bool isAmbient{false};
 };
 
 // Power (relative flux) of the ambient term, treated as an infinite hemisphere
@@ -371,6 +373,17 @@ VISRTX_DEVICE PickedCandidate pickCandidate(
       instancePickProbability(world, selected, totalPower)};
 }
 
+// Discrete probability that pickCandidate selects the ambient stratum. An
+// ambient term with Pick Power implies totalPower > 0, so the uniform fallback
+// above never applies to it.
+VISRTX_DEVICE float ambientPickProbability(const FrameGPUData &frameData)
+{
+  const float ambientPower = ambientPickPower(frameData);
+  if (!(ambientPower > 0.0f))
+    return 0.0f;
+  return ambientPower / (frameData.world.totalLightPower + ambientPower);
+}
+
 VISRTX_DEVICE SurfaceLightSample sampleLights(ScreenSample &ss,
     const FrameGPUData &frameData,
     const vec3 &origin,
@@ -391,7 +404,8 @@ VISRTX_DEVICE SurfaceLightSample sampleLights(ScreenSample &ss,
                 std::numeric_limits<float>::max(),
                 pick.pickPdf * cosNs * kInvPi},
         false,
-        false};
+        false,
+        true};
   }
 
   const auto &li = frameData.world.lightInstances[pick.instance];
@@ -737,6 +751,13 @@ VISRTX_GLOBAL void __raygen__()
                 const float pCosine = lightDotNs * kInvPi;
                 const float pSum = pLight + pBsdf + pCosine;
                 wNee = pSum > 0.0f ? pLight / pSum : 0.0f;
+              } else if (lightPick.isAmbient) {
+                // The ambient term is also reached by a BSDF escape (see the
+                // miss below); lightSample.pdf is its exact NEE density
+                // (pick probability × cosine hemisphere).
+                const float pBsdf =
+                    materialEvalPdf(shadingState, -ray.dir, lightSample.dir);
+                wNee = lightSample.pdf / (lightSample.pdf + pBsdf);
               } else if (lightPick.isGeometry) {
                 // lightSample.pdf is the exact NEE density (solid-angle × pick
                 // probability); the BSDF continuation can also hit this
@@ -867,6 +888,27 @@ VISRTX_GLOBAL void __raygen__()
                                : 0.0f;
           sample.color += wBsdf * sampleContribution * hdri;
           accumulateValue(sample.opacity, 1.f, sample.opacity);
+        }
+
+        // The ambient term is a uniform environment: a surface continuation
+        // that escapes sees it, MIS-weighted against the ambient NEE stratum
+        // (cosine hemisphere around the same shading normal, scaled by its
+        // pick probability). Without this, ambient light never showed up in
+        // specular reflections, which NEE cannot reach. Camera rays see the
+        // background instead, and volume scatters leave the ambient to volume
+        // NEE (as for the HDRI above).
+        const vec3 ambient = frameData.renderer.ambientColor
+            * frameData.renderer.ambientIntensity;
+        if (lastScatterWasSurface
+            && glm::any(glm::greaterThan(ambient, vec3(0.f)))) {
+          const float pAmbient = !isinf(bsdfPdf)
+              ? ambientPickProbability(frameData)
+                  * fmaxf(0.0f, dot(ray.dir, lastScatterNs)) * kInvPi
+              : 0.0f;
+          const float wBsdf = isinf(bsdfPdf) ? 1.0f
+              : bsdfPdf > 0.0f ? bsdfPdf / (bsdfPdf + pAmbient)
+                               : 0.0f;
+          sample.color += wBsdf * sampleContribution * ambient;
         }
 
         if (isFirstBounce)
