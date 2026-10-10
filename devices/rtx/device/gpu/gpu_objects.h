@@ -112,6 +112,11 @@ struct CameraGPUData
   vec3 pos;
   vec3 dir;
   vec3 up;
+  // Clip planes, perpendicular to 'dir': distances along 'dir' from 'pos'.
+  // Only camera rays are clipped (see applyCameraClipPlanes()); 0 and
+  // float max mean "no clipping".
+  float clipNear;
+  float clipFar;
   union
   {
     PerspectiveCameraGPUData perspective;
@@ -867,6 +872,19 @@ struct QualityRendererGPUData
 {
   int maxRayDepth;
   int maxTransparencyDepth;
+  // Path length limits with the meaning of Cycles: the number of bounces
+  // after the camera hit, in total and per kind of bounce; -1 = no limit.
+  // The bounce which exceeds a limit is still traced, it collects emission and
+  // environment light only (the MIS partner of the last light sample).
+  int maxBounce;
+  int maxDiffuseBounce;
+  int maxGlossyBounce;
+  int maxTransmissionBounce;
+  int maxVolumeBounce;
+  // Limits of R+G+B of one light contribution to a sample, for light which
+  // arrives at the camera hit (direct) and at later hits; 0 = no clamp.
+  float clampDirectSum;
+  float clampIndirectSum;
 };
 
 struct InteractiveRendererGPUData

@@ -48,6 +48,15 @@ struct Quality : public Renderer
 
   int m_maxRayDepth{5};
   int m_maxTransparencyDepth{32};
+  // -1: not set (no limit)
+  int m_maxBounce{-1};
+  int m_maxDiffuseBounce{-1};
+  int m_maxGlossyBounce{-1};
+  int m_maxTransmissionBounce{-1};
+  int m_maxVolumeBounce{-1};
+  // 0: no clamp
+  float m_clampDirect{0.f};
+  float m_clampIndirect{0.f};
 };
 
 } // namespace visrtx

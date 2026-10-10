@@ -72,6 +72,23 @@ VISRTX_DEVICE vec3 sampleNormalMap(const FrameGPUData &fd,
   return (dot(N, N) > 1e-12f) ? N : hit.Ng;
 }
 
+// A normal map can tilt the shading normal away from the viewer. The lobes of
+// this material are not defined for a view direction below the horizon of the
+// normal (evaluating them there anyway returned huge values for light sampled
+// by NEE, which nextRay could never have sampled: a normal-mapped surface
+// reflected more light than it received). Bend the normal back until the view
+// direction is just above its horizon. evalBsdf, the pdf and nextRay all use
+// this normal, so they stay consistent with each other.
+VISRTX_DEVICE vec3 viewFacingNormal(const vec3 &N, const vec3 &V)
+{
+  constexpr float MIN_NDOTV = 0.01f;
+  const float NdotV = dot(N, V);
+  if (NdotV >= MIN_NDOTV)
+    return N;
+  const vec3 bent = N + V * (MIN_NDOTV - NdotV);
+  return (dot(bent, bent) > 1e-12f) ? normalize(bent) : V;
+}
+
 VISRTX_DEVICE vec3 computeVolumeTransmission(
     const PhysicallyBasedShadingState *state)
 {
@@ -400,8 +417,8 @@ VISRTX_DEVICE vec3 evalFresnelWithIridescence(
 VISRTX_CALLABLE vec3 __direct_callable__evalBsdf(
     const PhysicallyBasedShadingState *state, const vec3 *wo, const vec3 *wi)
 {
-  const vec3 N = state->normal;
   const vec3 V = *wo;
+  const vec3 N = viewFacingNormal(state->normal, V);
   const vec3 L = *wi;
 
   const float NdotL = dot(N, L);
@@ -493,7 +510,7 @@ VISRTX_CALLABLE vec3 __direct_callable__evalBsdf(
 VISRTX_DEVICE float pbrBsdfPdf(
     const PhysicallyBasedShadingState *state, const vec3 &V, const vec3 &L)
 {
-  const vec3 N = state->normal;
+  const vec3 N = viewFacingNormal(state->normal, V);
   const float NdotV = dot(N, V);
   const float NdotL = dot(N, L);
   if (!(NdotV > 0.0f) || !(NdotL > 0.0f))
@@ -626,7 +643,7 @@ VISRTX_CALLABLE NextRay __direct_callable__nextRay(
     return glm::clamp(1.0f - state->clearcoat * FcL, 0.0f, 1.0f);
   };
 
-  const vec3 N = state->normal;
+  const vec3 N = viewFacingNormal(state->normal, V);
   const mat3 toWorld = computeOrthonormalBasis(N);
   const mat3 toLocal = glm::transpose(toWorld);
   const vec3 Vlocal = toLocal * V;
@@ -667,7 +684,7 @@ VISRTX_CALLABLE NextRay __direct_callable__nextRay(
     const vec3 wi = sampleHemisphere(*rs, N);
     const vec3 weight =
         diffuseEnergy * clearcoatExitAttn(wi) / fmaxf(pDiff, 1e-8f);
-    return NextRay{wi, weight, pbrBsdfPdf(state, V, wi)};
+    return NextRay{wi, weight, pbrBsdfPdf(state, V, wi), NEXT_RAY_DIFFUSE};
   }
 
   // Specular lobe: VNDF-sample the microfacet, then split reflect/transmit by

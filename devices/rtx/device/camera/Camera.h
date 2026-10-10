@@ -34,6 +34,7 @@
 #include "Object.h"
 #include "gpu/gpu_objects.h"
 // std
+#include <limits>
 #include <optional>
 
 namespace visrtx {
@@ -57,6 +58,8 @@ struct Camera : public Object
   vec3 m_dir{0.f, 0.f, 1.f};
   vec3 m_up{0.f, 1.f, 0.f};
   std::optional<float> m_aspect;
+  float m_near{0.f};
+  float m_far{std::numeric_limits<float>::max()};
 };
 
 } // namespace visrtx

@@ -57,6 +57,10 @@ void Camera::commitParameters()
   float aspect = 1.f;
   if (getParam("aspect", ANARI_FLOAT32, &aspect))
     m_aspect = aspect;
+
+  // Clip planes of camera rays; unset means no clipping
+  m_near = getParam<float>("near", 0.f);
+  m_far = getParam<float>("far", std::numeric_limits<float>::max());
 }
 
 void Camera::populateFrameData(CameraGPUData &fd, uvec2 /*frameSize*/) const
@@ -81,6 +85,8 @@ void Camera::populateBaseFrameData(CameraGPUData &fd) const
   fd.pos = m_pos;
   fd.dir = m_dir;
   fd.up = m_up;
+  fd.clipNear = m_near;
+  fd.clipFar = m_far;
 }
 
 float Camera::effectiveAspect(uvec2 frameSize) const

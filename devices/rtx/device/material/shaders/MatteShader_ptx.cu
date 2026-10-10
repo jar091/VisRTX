@@ -56,10 +56,19 @@ VISRTX_CALLABLE void __direct_callable__init(MatteShadingState *shadingState,
     shadingState->normal = hit->Ng;
 }
 
+// Lambertian continuation: cosine-weighted direction around the shading normal
+// (the axis of evalBsdf's NdotL), exactly like the diffuse lobe of the
+// physicallyBased material. f*cos/pdf collapses to the albedo; the pdf is the
+// one evaluatePdf reports, so the MIS weights of NEE and of this ray sum to 1.
 VISRTX_CALLABLE NextRay __direct_callable__nextRay(
-    const MatteShadingState *, const Ray *, RandState *)
+    const MatteShadingState *shadingState, const Ray *, RandState *rs)
 {
-  return NextRay{vec3(0.0f), vec3(0.0f), 0.0f};
+  const vec3 N = shadingState->normal;
+  const vec3 wi = sampleHemisphere(*rs, N);
+  const float NdotL = dot(N, wi);
+  if (!(NdotL > 0.0f))
+    return NextRay{N, vec3(0.0f), 0.0f};
+  return NextRay{wi, shadingState->baseColor, NdotL * kInvPi, NEXT_RAY_DIFFUSE};
 }
 
 VISRTX_CALLABLE
@@ -106,11 +115,12 @@ VISRTX_CALLABLE vec3 __direct_callable__evalBsdf(
   return shadingState->baseColor * kInvPi * NdotL;
 }
 
-// Matte has no continuation ray (nextRay returns a dead ray), so its BSDF can
-// never produce the environment direction: report pdf 0 so env MIS leaves NEE
-// owning the environment (w_nee = 1), matching the pre-MIS behavior.
+// Solid-angle density of nextRay's cosine-weighted sampling, for the MIS of
+// NEE (lights, environment) against the continuation ray. Must be the value
+// nextRay reports in NextRay.pdf for the same direction. `wo` is unused: the
+// lobe does not depend on it.
 VISRTX_CALLABLE float __direct_callable__evaluatePdf(
-    const MatteShadingState *, const vec3 *, const vec3 *)
+    const MatteShadingState *shadingState, const vec3 *, const vec3 *wi)
 {
-  return 0.0f;
+  return fmaxf(0.0f, dot(shadingState->normal, *wi)) * kInvPi;
 }

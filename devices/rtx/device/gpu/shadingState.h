@@ -53,7 +53,11 @@ namespace visrtx {
 enum NextRayFlags : uint32_t
 {
   NEXT_RAY_NONE = 0u,
-  NEXT_RAY_CONTINUES_THROUGH_SURFACE = 1u << 0
+  NEXT_RAY_CONTINUES_THROUGH_SURFACE = 1u << 0,
+  // The ray was sampled from a diffuse lobe; a reflection without this flag
+  // comes from a glossy or specular lobe. Only used to count the bounces of
+  // each kind against the path length limits of the renderer.
+  NEXT_RAY_DIFFUSE = 1u << 1
 };
 
 // Describes the next ray to be traced, as a result of the EvaluateNextRay call.

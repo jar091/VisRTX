@@ -241,6 +241,7 @@ VISRTX_GLOBAL void __raygen__()
     color = hdri;
   }
   auto depth = ray.t.upper;
+  applyCameraClipPlanes(frameData.camera, ray);
   auto normal = ray.dir;
   uint32_t primID = ~0u;
   uint32_t objID = ~0u;

@@ -95,6 +95,20 @@ VISRTX_DEVICE void accumPixelSample(
       sample.normal);
 }
 
+// Clamp of one light contribution to a pixel sample, as Cycles does it: the
+// sum R+G+B is limited and the color keeps its hue. `lightBounce` is the
+// number of bounces before the hit which receives the light: 0 (and the -1 of
+// emission seen by the camera itself) is direct light, the rest indirect.
+VISRTX_DEVICE vec3 clampContribution(
+    const QualityRendererGPUData &q, const vec3 &c, int lightBounce)
+{
+  const float limit = lightBounce > 0 ? q.clampIndirectSum : q.clampDirectSum;
+  if (!(limit > 0.0f))
+    return c;
+  const float sum = fabsf(c.x) + fabsf(c.y) + fabsf(c.z);
+  return sum > limit ? c * (limit / sum) : c;
+}
+
 // Per-channel surface shadow blocking (vec3): opacity scaled by how much light
 // the tinted transmission lets through. Component-wise 0 = transparent,
 // 1 = fully blocking.
@@ -550,8 +564,13 @@ VISRTX_GLOBAL void __raygen__()
 
     applyCuttingPlane(rendererParams.cutPlane, ray);
 
+    // Depth of a camera ray that hits nothing; taken before the camera clip
+    // planes shorten the ray, so the far plane does not show up in it.
+    const float missDepth = ray.t.upper;
+    applyCameraClipPlanes(frameData.camera, ray);
+
     SampleDetails sample = {
-        vec3(0.0f), 0.0f, vec3(0.0f), ray.t.upper, vec3(0.0f)};
+        vec3(0.0f), 0.0f, vec3(0.0f), missDepth, vec3(0.0f)};
 
     auto sampleContribution = vec3(1.0f);
 
@@ -572,7 +591,25 @@ VISRTX_GLOBAL void __raygen__()
     // of alpha cutouts must not starve the indirect-bounce budget.
     int bounceDepth = 0;
     int transparencyDepth = 0;
-    while (bounceDepth < qualityParams.maxRayDepth) {
+
+    // Path length limits of Cycles ('maxBounce' and the limits per kind of
+    // bounce): counted from 0 at the camera hit. The bounce which exceeds a
+    // limit is still traced but collects emission and environment light only,
+    // so the light sample of the last full hit keeps its MIS partner. Without
+    // 'maxBounce' the loop is bounded by 'maxRayDepth' as before.
+    int diffuseDepth = 0;
+    int glossyDepth = 0;
+    int transmissionDepth = 0;
+    int volumeDepth = 0;
+    bool emissionOnly = false;
+    auto exceedsLimit = [&](int limit, int depth) {
+      return limit >= 0 && depth > limit;
+    };
+    const int maxPathVertices = qualityParams.maxBounce >= 0
+        ? qualityParams.maxBounce + 2
+        : qualityParams.maxRayDepth;
+
+    while (bounceDepth < maxPathVertices) {
       const bool isFirstBounce = bounceDepth == 0 && transparencyDepth == 0;
 
       SurfaceHit surfaceHit = {};
@@ -588,6 +625,9 @@ VISRTX_GLOBAL void __raygen__()
       auto volumeSample = sampleVolumeDistance(ss, volumeRay, isFirstBounce);
 
       if (volumeSample.didScatter) {
+        if (emissionOnly)
+          break; // a volume emits nothing
+
         const vec3 scatterPos = ray.org + ray.dir * volumeSample.depth;
 
         {
@@ -619,7 +659,8 @@ VISRTX_GLOBAL void __raygen__()
               const auto attenuation = surfaceShadowTransmittance(ss, shadowRay)
                   * volumeShadowTransmittance(ss, shadowRay);
               ss.shadowContribWeight = 1.0f;
-              sample.color += contribUpper * attenuation;
+              sample.color += clampContribution(
+                  qualityParams, contribUpper * attenuation, bounceDepth);
             }
           }
         }
@@ -665,6 +706,10 @@ VISRTX_GLOBAL void __raygen__()
         bsdfPdf = 0.0f;
         lastScatterWasSurface = false;
         ++bounceDepth;
+        ++volumeDepth;
+        if (exceedsLimit(qualityParams.maxBounce, bounceDepth)
+            || exceedsLimit(qualityParams.maxVolumeBounce, volumeDepth))
+          emissionOnly = true;
         continue;
       }
 
@@ -703,8 +748,22 @@ VISRTX_GLOBAL void __raygen__()
           if (pNee > 0.0f)
             wEmission = bsdfPdf / (bsdfPdf + pNee);
         }
-        sample.color +=
-            wEmission * sampleContribution * opacity * materialEmission;
+        sample.color += clampContribution(qualityParams,
+            wEmission * sampleContribution * opacity * materialEmission,
+            bounceDepth - 1);
+
+        if (emissionOnly) {
+          // Beyond a path length limit: no light sample and no bounce. The
+          // path only goes on straight through a surface which is not there.
+          if (pcg_uniform(&ss.rs) > opacity
+              && ++transparencyDepth <= qualityParams.maxTransparencyDepth) {
+            ray = Ray{surfaceHit.hitpoint - surfaceHit.Ng * surfaceHit.epsilon,
+                ray.dir};
+            continue;
+          }
+          break;
+        }
+
         // Sample around the shading normal so the cosine-weighted hemisphere's
         // pdf matches the BRDF's NdotL (which uses Ns). Sampling around Ng
         // would bias the Lambertian estimator by cos_Ns/cos_Ng on smooth or
@@ -790,16 +849,18 @@ VISRTX_GLOBAL void __raygen__()
                     surfaceShadowTransmittance(ss, shadowRay)
                     * volumeShadowTransmittance(ss, shadowRay);
                 ss.shadowContribWeight = 1.0f;
-                sample.color += contribUpper * attenuation;
+                sample.color += clampContribution(
+                    qualityParams, contribUpper * attenuation, bounceDepth);
               }
             }
           }
         }
 
         // Cosine-hemisphere env NEE: always, when the world has an HDRI — not
-        // only when Light Pick selected it. Matte has no continuation, so
-        // gating this on isEnv left most mixed-light pixels with zero env
-        // samples. p_C has no pick factor (the strategy always runs). p_L still
+        // only when Light Pick selected it. Gating this on isEnv left most
+        // mixed-light pixels with zero env samples (the continuation ray is
+        // the only other path to the environment, and Matte had none when this
+        // was added). p_C has no pick factor (the strategy always runs). p_L still
         // carries each instance's pick probability because CDF NEE is
         // pick-gated.
         if (frameData.world.numHdriLightInstances > 0) {
@@ -830,7 +891,8 @@ VISRTX_GLOBAL void __raygen__()
                     surfaceShadowTransmittance(ss, shadowRay)
                     * volumeShadowTransmittance(ss, shadowRay);
                 ss.shadowContribWeight = 1.0f;
-                sample.color += contribUpper * attenuation;
+                sample.color += clampContribution(
+                    qualityParams, contribUpper * attenuation, bounceDepth);
               }
             }
           }
@@ -842,6 +904,10 @@ VISRTX_GLOBAL void __raygen__()
             break;
           ray = Ray{surfaceHit.hitpoint - surfaceHit.Ng * surfaceHit.epsilon,
               ray.dir};
+          // Still the camera ray (pass-throughs are no bounces): it keeps
+          // ending on the far clip plane of the camera.
+          if (bounceDepth == 0)
+            applyCameraClipPlanes(frameData.camera, ray);
           continue;
         }
 
@@ -857,11 +923,37 @@ VISRTX_GLOBAL void __raygen__()
         if (!continuesThroughSurface(nextRay))
           accumulateValue(sample.opacity, 1.0f, sample.opacity);
 
+        // The lobes are sampled around the shading normal (smooth shading,
+        // normal maps), so a direction can end up on the wrong side of the
+        // surface itself: a reflection which points into it, or a transmission
+        // which points back out. Such a path ends here, as in Cycles. Traced
+        // anyway, the ray (which starts above the surface) would dive into the
+        // surface next to the hit and collect its light a second time.
+        {
+          const float dirDotNg = dot(vec3(nextRay.direction), surfaceHit.Ng);
+          if (continuesThroughSurface(nextRay) ? dirDotNg >= 0.0f
+                                               : dirDotNg <= 0.0f)
+            break;
+        }
+
         if (shouldTerminatePath(ss, bounceDepth, sampleContribution, true))
           break;
 
         lastScatterNs = surfaceHit.Ns;
         lastScatterWasSurface = true;
+
+        // Count the bounce by its kind (see the limits above).
+        if (continuesThroughSurface(nextRay)) {
+          if (exceedsLimit(
+                  qualityParams.maxTransmissionBounce, ++transmissionDepth))
+            emissionOnly = true;
+        } else if (nextRay.flags & NEXT_RAY_DIFFUSE) {
+          if (exceedsLimit(qualityParams.maxDiffuseBounce, ++diffuseDepth))
+            emissionOnly = true;
+        } else {
+          if (exceedsLimit(qualityParams.maxGlossyBounce, ++glossyDepth))
+            emissionOnly = true;
+        }
 
         const float side = continuesThroughSurface(nextRay) ? -1.0f : 1.0f;
         ray =
@@ -886,7 +978,8 @@ VISRTX_GLOBAL void __raygen__()
           const float wBsdf = isinf(bsdfPdf) ? 1.0f
               : bsdfPdf > 0.0f ? bsdfPdf / (bsdfPdf + pLight + pCosine)
                                : 0.0f;
-          sample.color += wBsdf * sampleContribution * hdri;
+          sample.color += clampContribution(
+              qualityParams, wBsdf * sampleContribution * hdri, bounceDepth - 1);
           accumulateValue(sample.opacity, 1.f, sample.opacity);
         }
 
@@ -908,11 +1001,13 @@ VISRTX_GLOBAL void __raygen__()
           const float wBsdf = isinf(bsdfPdf) ? 1.0f
               : bsdfPdf > 0.0f ? bsdfPdf / (bsdfPdf + pAmbient)
                                : 0.0f;
-          sample.color += wBsdf * sampleContribution * ambient;
+          sample.color += clampContribution(qualityParams,
+              wBsdf * sampleContribution * ambient,
+              bounceDepth - 1);
         }
 
         if (isFirstBounce)
-          setPixelIds(frameData.fb, ss.pixel, ray.t.upper, ~0u, ~0u, ~0u);
+          setPixelIds(frameData.fb, ss.pixel, missDepth, ~0u, ~0u, ~0u);
 
         break;
       }
@@ -920,6 +1015,8 @@ VISRTX_GLOBAL void __raygen__()
       // Only a surface bounce reaches here (volume scatter and coverage
       // pass-through continue earlier, an environment miss breaks).
       ++bounceDepth;
+      if (exceedsLimit(qualityParams.maxBounce, bounceDepth))
+        emissionOnly = true;
     }
 
     accumPixelSample(frameData, ss.pixel, sample);

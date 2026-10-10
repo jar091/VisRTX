@@ -278,8 +278,11 @@ struct InteractiveShadingPolicy
     // Single indirect bounce — REFLECTION only. Transmission/refraction is
     // owned by the flat compositing loop, so a through-surface continuation is
     // discarded here to avoid double-counting the transmitted background.
+    // A reflection which points into the surface itself (the lobe is sampled
+    // around the shading normal) is dropped, see Quality_ptx.cu.
     NextRay nextRay = materialNextRay(shadingState, ray, ss.rs);
     if (!continuesThroughSurface(nextRay)
+        && dot(vec3(nextRay.direction), hit.Ng) > 0.0f
         && glm::any(glm::greaterThan(
             nextRay.contributionWeight, glm::vec3(MIN_CONTRIBUTION_EPSILON)))) {
       Ray bounceRay = {

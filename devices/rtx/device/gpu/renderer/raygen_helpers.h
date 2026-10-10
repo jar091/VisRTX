@@ -84,6 +84,7 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
         + uint32_t(i);
     auto ray = makePrimaryRay(ss, sampleIdx, isVeryFirstRay);
     applyCuttingPlane(rendererParams.cutPlane, ray);
+    applyCameraClipPlanes(frameData.camera, ray);
     float tmax = ray.t.upper;
 
     // Output accumulators. outputOpacity is the scalar coverage track driving
@@ -107,6 +108,8 @@ VISRTX_DEVICE void renderPixel(FrameGPUData &frameData, ScreenSample ss)
     // Transparency traversal loop. For T=0 (opaque), luminance(remainingT) ==
     // 1 - outputOpacity.
     while (luminance(remainingT) > 1.f - OPACITY_THRESHOLD) {
+      if (ray.t.lower > tmax)
+        break; // advanced past the end of the (clipped) ray
       ray.t.upper = tmax;
 
       SurfaceHit surfaceHit;

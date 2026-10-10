@@ -212,9 +212,15 @@ NextRay __direct_callable__nextRay(
 
   const vec3 direction(sample_data.k2.x, sample_data.k2.y, sample_data.k2.z);
   const vec3 N = normalize(make_vec3(shadingState->state.normal));
-  const uint32_t flags = dot(ray->dir, N) * dot(direction, N) > 0.0f
-      ? NEXT_RAY_CONTINUES_THROUGH_SURFACE
-      : NEXT_RAY_NONE;
+  // NEXT_RAY_DIFFUSE only tells the renderer which path length limit the
+  // bounce counts against.
+  const uint32_t flags = uint32_t(dot(ray->dir, N) * dot(direction, N) > 0.0f
+          ? NEXT_RAY_CONTINUES_THROUGH_SURFACE
+          : NEXT_RAY_NONE)
+      | uint32_t((sample_data.event_type & mi::neuraylib::BSDF_EVENT_DIFFUSE)
+              != 0
+          ? NEXT_RAY_DIFFUSE
+          : NEXT_RAY_NONE);
 
   // Env-MIS solid-angle pdf for the sampled direction, matching
   // __direct_callable__evaluatePdf so the balance heuristic partitions to 1.

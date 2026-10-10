@@ -100,8 +100,7 @@ VISRTX_DEVICE NextRay materialNextRay(
 
 // Solid-angle pdf the material's BSDF sampler would assign to direction `wi`
 // given outgoing direction `wo` (both world space), for environment MIS. 0 for
-// no material and for materials whose sampler cannot produce `wi` (e.g. Matte,
-// which has no continuation ray).
+// no material and for directions the material's sampler cannot produce.
 VISRTX_DEVICE float materialEvalPdf(const MaterialShadingState &shadingState,
     const vec3 &wo,
     const vec3 &wi)

@@ -327,13 +327,18 @@ VISRTX_DEVICE vec3 shadingHitpoint(const SurfaceHit &hit)
   n1 = normalize(n1);
   n2 = normalize(n2);
 
-  // populateHit.h flips hit.Ng/Ns for back-face hits so they point toward
-  // the ray origin. The per-vertex normals here are still in the original
-  // outward orientation; flip them too so the smooth surface bulges onto
-  // the ray-origin side of the facet (otherwise Hanika lifts P away from
-  // the ray origin and the trailing `+ Ng * epsilon` can land below the
-  // facet).
-  if (!hit.isFrontFace) {
+  // populateHit.h flips hit.Ng/Ns so they point toward the ray origin. The
+  // per-vertex normals here are still as authored; orient them to that side
+  // too so the smooth surface bulges onto the ray-origin side of the facet
+  // (otherwise Hanika lifts P away from the ray origin and the trailing
+  // `+ Ng * epsilon` can land below the facet, which shadows the hit
+  // completely). Authored normals may point to either side of the winding
+  // (inside-out or flipped faces), so compare them with the facet normal
+  // instead of relying on the facing of the hit.
+  vec3 ng = cross(v1 - v0, v2 - v0);
+  if (!hit.isFrontFace)
+    ng = -ng;
+  if (dot(ng, hit.uvw.x * n0 + hit.uvw.y * n1 + hit.uvw.z * n2) < 0.f) {
     n0 = -n0;
     n1 = -n1;
     n2 = -n2;

@@ -72,6 +72,35 @@ VISRTX_DEVICE Ray cameraCreateRay(const CameraGPUData &c, vec2 screen, vec2 r)
   return ray;
 }
 
+// Clips a camera ray to the slab between the near and far clip planes of the
+// camera. The planes are perpendicular to the camera direction: their
+// distances are measured along that direction, not along the ray. They are
+// intersected in world space, so 'ray.org' can be any point of the camera ray
+// (lens sample, origin advanced by a cutting plane, continuation behind a
+// see-through surface). Only 'ray.t' changes: hit distances stay relative to
+// 'ray.org', and rays other than camera rays are never clipped.
+VISRTX_DEVICE void applyCameraClipPlanes(const CameraGPUData &c, Ray &ray)
+{
+  const bool clipNear = c.clipNear > 0.f;
+  const bool clipFar = c.clipFar < std::numeric_limits<float>::max();
+  if (!clipNear && !clipFar)
+    return;
+
+  const float cosAxis = glm::dot(ray.dir, c.dir);
+  if (cosAxis > 1e-6f) {
+    const float axisDist = glm::dot(ray.org - c.pos, c.dir);
+    if (clipNear)
+      ray.t.lower = glm::max(ray.t.lower, (c.clipNear - axisDist) / cosAxis);
+    if (clipFar)
+      ray.t.upper = glm::min(ray.t.upper, (c.clipFar - axisDist) / cosAxis);
+  } else {
+    ray.t.upper = 0.f; // ray never enters the slab
+  }
+
+  if (!(ray.t.lower <= ray.t.upper))
+    ray.t = box1(0.f, 0.f); // nothing of the ray is left
+}
+
 // sampleIdx is a (frame-counter × spp_loop) ordinal advancing once per
 // camera sample within the frame's accumulation; combined with a
 // per-pixel hash offset it indexes a Halton 4D point used for
