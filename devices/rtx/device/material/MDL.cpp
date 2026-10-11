@@ -311,6 +311,7 @@ void MDL::syncSource()
 
   // Any failure path falls back to the default material so a committed MDL
   // material always ends up with a valid argument block.
+  m_sourceFailed = uuid == libmdl::Uuid{};
   if (uuid == libmdl::Uuid{}) {
     reportMessage(ANARI_SEVERITY_WARNING,
         "MDL::syncSource(): falling back to ::visrtx::default::diffuseWhite");

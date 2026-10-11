@@ -90,6 +90,9 @@ struct MDL : public Material
   };
   std::optional<SourceHandoff> m_sourceHandoff;
 
+  // The last source did not load and the default material stands in for it.
+  bool m_sourceFailed{false};
+
  private:
   MaterialGPUData gpuData() const override;
   std::map<std::string, helium::AnariAny> m_parameterMap;

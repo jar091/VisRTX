@@ -41,6 +41,7 @@
 #include <MaterialXGenShader/UnitSystem.h>
 #include <MaterialXGenShader/Util.h>
 
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -436,6 +437,23 @@ TranscodeResult transcodeMaterialXToMdl(
     auto shader = gen->generate(elem->getName(), elem, context);
     result.mdlSource = shader->getSourceCode(mx::Stage::PIXEL);
     result.materialName = shader->getName();
+    // The generator renames an element whose name is a reserved word of MDL
+    // (Blender names its material "material", which is exported as
+    // "material1"): the name the module exports is the one to look up.
+    {
+      static const std::string marker = "export material ";
+      const auto begin = result.mdlSource.rfind(marker);
+      if (begin != std::string::npos) {
+        const auto first = begin + marker.size();
+        auto last = first;
+        while (last < result.mdlSource.size()
+            && (std::isalnum(static_cast<unsigned char>(result.mdlSource[last]))
+                || result.mdlSource[last] == '_'))
+          ++last;
+        if (last > first)
+          result.materialName = result.mdlSource.substr(first, last - first);
+      }
+    }
 
     // Build paramMap from MDL::INPUTS, pairing spliced image ports per input.
     std::map<std::string, ParamMapping> texturedRows; // cleanName -> paired row

@@ -342,6 +342,13 @@ bool MaterialX::getProperty(const std::string_view &name, ANARIDataType type,
     *out = m_textureInputPtrs.data();
     return true;
   }
+  if (name == "valid" && type == ANARI_BOOL) {
+    // False while the default material stands in for the document: it was not
+    // transcoded, or its MDL did not compile. An application which has another
+    // description of the material can use that one instead.
+    helium::writeToVoidP(ptr, !(m_generatedSource.empty() || m_sourceFailed));
+    return true;
+  }
   return MDL::getProperty(name, type, ptr, size, flags);
 }
 
